@@ -468,24 +468,292 @@ swift run
 
 ---
 
-## OTP Equivalence
+## DistributedCluster vs DistributedKit
+
+DistributedKit builds on top of Apple's [`swift-distributed-actors`](https://github.com/apple/swift-distributed-actors) (`DistributedCluster`). The base library gives you distributed actors, cluster formation, a receptionist for discovery, and lifecycle watching -- but leaves state management, supervision, and ergonomic patterns up to you. DistributedKit fills those gaps.
+
+### Defining an Actor with State
+
+**DistributedCluster** -- state is ad-hoc, no standard call/cast pattern:
+
+```swift
+import DistributedCluster
+
+distributed actor Counter {
+    var count: Int = 0
+
+    distributed func get() -> Int {
+        count
+    }
+
+    distributed func increment() {
+        count += 1
+    }
+
+    distributed func decrement() {
+        count -= 1
+    }
+}
+```
+
+**DistributedKit** -- structured `ServerBehavior` with typed messages, explicit state transitions, and reply semantics:
+
+```swift
+import DistributedKit
+
+enum CounterCall: Sendable, Codable { case get }
+enum CounterCast: Sendable, Codable { case increment, decrement }
+
+@Service(name: "counter")
+distributed actor Counter: ServerBehavior {
+    typealias CallMessage = CounterCall
+    typealias CastMessage = CounterCast
+    typealias State = Int
+
+    var _state: Int = 0
+
+    init(actorSystem: ClusterSystem) {
+        self.actorSystem = actorSystem
+    }
+
+    func handleCall(_ msg: CounterCall, state: inout Int) async throws -> CallReply<Int> {
+        switch msg {
+        case .get: return .reply(state)
+        }
+    }
+
+    func handleCast(_ msg: CounterCast, state: inout Int) async throws -> CastReply<Int> {
+        switch msg {
+        case .increment: state += 1
+        case .decrement: state -= 1
+        }
+        return .noreply(state)
+    }
+
+    distributed func get() async throws -> Int {
+        let (reply, newState) = try await processCall(.get, state: _state)
+        _state = newState
+        switch reply {
+        case .reply(let v): return v
+        case .noReply(let v): return v
+        case .stop(_, let v): return v
+        }
+    }
+
+    distributed func increment() async throws {
+        let (_, newState) = try await processCast(.increment, state: _state)
+        _state = newState
+    }
+}
+```
+
+> **Why this matters:** The raw approach works for simple actors, but as state grows complex you end up re-inventing call/cast patterns, reply types, and error handling in each actor. `ServerBehavior` standardizes this so every actor has the same structure, making them easier to reason about and test.
+
+### Service Discovery
+
+**DistributedCluster** -- low-level receptionist with `DistributedReception.Key`, async stream listings:
+
+```swift
+// Define a reception key
+extension DistributedReception.Key {
+    static var workers: DistributedReception.Key<Worker> { "workers" }
+}
+
+// Check in
+let worker = Worker(actorSystem: system)
+await system.receptionist.checkIn(worker, with: .workers)
+
+// Discover -- returns an AsyncSequence you must iterate
+for await worker in await system.receptionist.listing(of: .workers) {
+    try await worker.work()
+}
+```
+
+**DistributedKit** -- typed `Registry` with simple register/lookup:
+
+```swift
+let registry = Registry(system: system)
+let key = ServiceKey<Worker>(id: "my-worker")
+
+// Register
+await registry.register(worker, key: key)
+
+// Lookup -- returns Worker? directly
+if let found = await registry.lookup(key) {
+    try await found.work()
+}
+```
+
+> **Why this matters:** The receptionist API requires defining `DistributedReception.Key` extensions, using async for-await streams even when you just want one actor, and managing listing tasks with cancellation. `Registry` + `ServiceKey` gives you a one-liner typed lookup.
+
+### Singleton Actors
+
+**DistributedCluster** -- plugin installation, `ClusterSingleton` protocol, proxy pattern:
+
+```swift
+// 1. Install the plugin at system startup
+let system = await ClusterSystem("MyApp") { settings in
+    settings.plugins.install(plugin: ClusterSingletonPlugin())
+}
+
+// 2. Conform to ClusterSingleton
+distributed actor Overseer: ClusterSingleton {
+    distributed func status() -> String { "ok" }
+}
+
+// 3. Host via the plugin (returns a proxy)
+let overseer = try await system.singleton.host(name: "overseer") { system in
+    Overseer(actorSystem: system)
+}
+
+// 4. Call through the proxy
+let status = try await overseer.status()
+```
+
+**DistributedKit** -- `@Service` macro + `Singleton.resolve`:
+
+```swift
+@Service(name: "overseer")
+distributed actor Overseer: ServerBehavior {
+    // ... handleCall / handleCast ...
+}
+
+// Register, then resolve by type
+let overseer = try await Singleton<Overseer>.resolve(on: system)
+```
+
+> **Why this matters:** The `ClusterSingleton` plugin approach requires plugin setup at system init, a separate protocol, and understanding the proxy pattern. DistributedKit's `Singleton` is a single line after registration.
+
+### Supervision
+
+**DistributedCluster** -- no supervision primitives. You build your own:
+
+```swift
+// You have to manually:
+// 1. Start actors
+// 2. Watch them with LifecycleWatch
+// 3. Implement terminated(actor:) to detect crashes
+// 4. Decide whether/how to restart
+// 5. Track restart counts and time windows yourself
+
+distributed actor MyManager: LifecycleWatch {
+    var workers: [ActorID: Worker] = [:]
+
+    func startWorker() async throws {
+        let w = Worker(actorSystem: actorSystem)
+        watchTermination(of: w)
+        workers[w.id] = w
+    }
+
+    func terminated(actor id: ActorID) async {
+        workers.removeValue(forKey: id)
+        // Manually restart? Track restart counts? Apply a strategy?
+        // All up to you.
+        try? await startWorker()
+    }
+}
+```
+
+**DistributedKit** -- declarative supervision trees with strategies:
+
+```swift
+let tree = SupervisorTree("MyApp") {
+    Supervisor("workers", strategy: .oneForOne, maxRestarts: 5, withinSeconds: 10) {
+        Counter.childSpec()  // @Service-generated, restart: .permanent
+        ChildSpec<Worker>(
+            name: "background-worker",
+            restart: .transient,
+            factory: { sys in Worker(actorSystem: sys) }
+        )
+    }
+}
+
+try await tree.run(on: system)
+```
+
+> **Why this matters:** Supervision is the core of fault-tolerant systems. DistributedCluster provides `LifecycleWatch` as a building block, but you must implement all restart logic, strategies, and rate limiting yourself. DistributedKit gives you OTP-style supervision out of the box.
+
+### Testing
+
+**DistributedCluster** -- manual cluster setup and teardown:
+
+```swift
+import DistributedCluster
+
+func testCounter() async throws {
+    let system = await ClusterSystem("Test") { settings in
+        settings.bindPort = 9001  // Hope this port isn't taken
+    }
+    defer { try? system.shutdown() }
+
+    let counter = Counter(actorSystem: system)
+    try await counter.increment()
+    let count = try await counter.get()
+    assert(count == 1)
+}
+```
+
+**DistributedKit** -- `withCluster` scopes lifecycle, auto-assigns ports:
+
+```swift
+import DistributedKitTestKit
+
+@Test func counterIncrements() async throws {
+    try await withCluster("CounterTest") { system in
+        let counter = Counter(actorSystem: system)
+        try await counter.increment()
+        #expect(try await counter.get() == 1)
+    }
+    // System automatically shut down, port auto-assigned
+}
+```
+
+`TestProbe` lets you assert messages were sent:
+
+```swift
+try await withCluster { system in
+    let probe = TestProbe<String>(actorSystem: system)
+    try await probe.send("hello")
+    let msg = try await probe.expectMessage(timeout: .seconds(3))
+    #expect(msg == "hello")
+}
+```
+
+### Summary
+
+| Concern | DistributedCluster | DistributedKit |
+|---------|-------------------|----------------|
+| Actor state pattern | Ad-hoc per actor | `ServerBehavior` with typed call/cast/state |
+| Boilerplate reduction | None | `@Service` macro generates `childSpec()` + conformance |
+| Service discovery | `DistributedReception.Key` + async stream | `Registry` + `ServiceKey` with typed lookup |
+| Singleton | `ClusterSingletonPlugin` + proxy | `Singleton<T>.resolve(on:)` |
+| Supervision | Manual via `LifecycleWatch` | `SupervisorTree` DSL with strategies and restart limits |
+| Testing | Manual `ClusterSystem` setup | `withCluster`, `LocalActorSystem`, `TestProbe` |
+| Lifecycle callbacks | None (use `deinit`) | `onInit()`, `onTerminate(reason:)` |
+| Restart strategies | Not provided | `.permanent`, `.transient`, `.temporary` |
+
+---
+
+## Elixir/OTP Quick Reference
+
+For developers coming from Elixir/OTP:
 
 | Elixir/OTP | DistributedKit |
 |---|---|
-| `use GenServer` | `ServerBehavior` protocol + `@Service` macro |
+| `use GenServer` | `ServerBehavior` + `@Service` |
 | `GenServer.call/2` | `handleCall` / `processCall` |
 | `GenServer.cast/2` | `handleCast` / `processCast` |
 | `GenServer.init/1` | `onInit()` |
 | `GenServer.terminate/2` | `onTerminate(reason:)` |
-| `{:reply, reply, state}` | `CallReply.reply(state)` |
+| `{:reply, value, state}` | `CallReply.reply(state)` |
 | `{:noreply, state}` | `CastReply.noreply(state)` |
 | `{:stop, reason, state}` | `.stop(reason, state)` |
-| `Supervisor.start_link/2` | `SupervisorTree { Supervisor { ... } }` |
+| `Supervisor.start_link/2` | `SupervisorTree { Supervisor { } }` |
+| `Supervisor.child_spec/1` | `@Service` generates `childSpec()` |
 | `:one_for_one` / `:one_for_all` / `:rest_for_one` | `.oneForOne` / `.oneForAll` / `.restForOne` |
 | `:permanent` / `:transient` / `:temporary` | `.permanent` / `.transient` / `.temporary` |
-| `Supervisor.child_spec/1` | `@Service` macro generates `childSpec()` |
 | `Registry` | `Registry` + `ServiceKey` |
-| `GenServer.start_link(name: {:via, ...})` | `Singleton<T>.resolve(on:)` |
+| `GenServer.start_link(name: ...)` | `Singleton<T>.resolve(on:)` |
 
 ## Requirements
 
