@@ -11,12 +11,16 @@ public struct BoundSupervisorTree: Service, Sendable {
     }
 
     public func run() async throws {
-        let runtime = SupervisorRuntime(system: system, name: tree.name)
-        try await runtime.startTree(tree.children)
-        await withTaskCancellationOrGracefulShutdownHandler {
-            await runtime.waitUntilStopped()
+        let runtime = SupervisorRuntime(
+            actorSystem: system,
+            name: tree.name,
+            children: tree.children
+        )
+        try await runtime.start()
+        try await withTaskCancellationOrGracefulShutdownHandler {
+            try await runtime.waitUntilStopped()
         } onCancelOrGracefulShutdown: {
-            Task { await runtime.initiateShutdown() }
+            Task { try await runtime.initiateShutdown() }
         }
     }
 }

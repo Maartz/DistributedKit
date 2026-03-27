@@ -6,7 +6,21 @@ public protocol ChildSpecProtocol: Sendable {
     func start(on system: ClusterSystem) async throws -> any DistributedActor
 }
 
-public struct ChildSpec<A: DistributedActor>: ChildSpecProtocol, Sendable
+/// Closure type for lifecycle-watched actor creation.
+/// Uses `isolated SupervisorRuntime` to run within the supervisor's context,
+/// enabling `watchTermination(of:)` with the concrete actor type.
+typealias WatchedStartFn = @Sendable (
+    ClusterSystem, isolated SupervisorRuntime
+) async throws -> (any DistributedActor, ActorID)
+
+/// Internal protocol for specs that support lifecycle-watched startup.
+/// Kept separate from `ChildSpecProtocol` to avoid access-level and
+/// distributed-protocol constraints.
+protocol _WatchableSpec {
+    var _watchedStart: WatchedStartFn { get }
+}
+
+public struct ChildSpec<A: DistributedActor>: ChildSpecProtocol, _WatchableSpec, Sendable
     where A.ActorSystem == ClusterSystem
 {
     public let name: String
@@ -25,5 +39,13 @@ public struct ChildSpec<A: DistributedActor>: ChildSpecProtocol, Sendable
 
     public func start(on system: ClusterSystem) async throws -> any DistributedActor {
         try await factory(system)
+    }
+
+    var _watchedStart: WatchedStartFn {
+        { [factory] system, watcher in
+            let actor = try await factory(system)
+            watcher.watchTermination(of: actor)
+            return (actor, actor.id)
+        }
     }
 }

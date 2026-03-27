@@ -24,7 +24,7 @@ public struct SupervisorTree: Sendable {
 
     @available(*, deprecated, message: "Use bind(to:) and ServiceGroup instead")
     public func run(on system: ClusterSystem) async throws {
-        let runtime = SupervisorRuntime(system: system, name: name)
-        try await runtime.startTree(children)
+        let runtime = SupervisorRuntime(actorSystem: system, name: name, children: children)
+        try await runtime.start()
     }
 }
