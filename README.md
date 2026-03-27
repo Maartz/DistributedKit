@@ -271,8 +271,8 @@ let tree = SupervisorTree("MyApp") {
     }
 }
 
-// Start the tree on a cluster
-try await tree.run(on: system)
+// Bind to a cluster system and use with ServiceGroup
+let bound = tree.bind(to: system)
 ```
 
 #### Supervisor
@@ -391,6 +391,7 @@ All framework errors are cases of `DistributedKitError`:
 | `.serviceNotFound(String)` | `Singleton.resolve` finds no registered actor |
 | `.supervisionMaxRestartsExceeded(name:count:)` | Child exceeded `maxRestarts` within the time window |
 | `.factoryFailed(name:underlying:)` | `ChildSpec.factory` threw during startup |
+| `.missingClusterSystem` | Operation requires a bound `ClusterSystem` |
 
 ---
 
@@ -734,6 +735,73 @@ try await withCluster { system in
 
 ---
 
+## Lifecycle Integration
+
+DistributedKit integrates with [`swift-service-lifecycle`](https://github.com/swift-server/swift-service-lifecycle) so your application composes with Hummingbird, Vapor, and any other SSWG framework. Signal handling and graceful shutdown come for free.
+
+> **OTP equivalent:** `DistributedKitApplication` corresponds to Elixir's `:application` behaviour -- it's the top-level entry point that boots the system and starts the supervision tree.
+
+### High-Level: DistributedKitApplication
+
+The simplest way to run a DistributedKit app. This is your entire `main.swift`:
+
+```swift
+import DistributedKit
+
+try await DistributedKitApplication(
+    name: "MyApp",
+    clusterSettings: { settings in
+        settings.bindPort = 7000
+    }
+) {
+    Supervisor(strategy: .oneForOne) {
+        Counter.childSpec()
+        Worker.childSpec()
+    }
+}.run()
+// Blocks until SIGTERM/SIGINT, then shuts down cleanly.
+```
+
+### Low-Level: ServiceGroup Composition
+
+For full control, use `ClusterSystemService` and `BoundSupervisorTree` directly with `ServiceGroup`:
+
+```swift
+import DistributedKit
+import ServiceLifecycle
+import Logging
+
+let system = await ClusterSystem("MyApp") { settings in
+    settings.bindPort = 7000
+}
+
+let tree = SupervisorTree("MyApp") {
+    Supervisor(strategy: .oneForOne) {
+        Counter.childSpec()
+    }
+}
+
+let group = ServiceGroup(
+    services: [
+        ClusterSystemService(system),  // Wraps ClusterSystem as a Service
+        tree.bind(to: system),         // Returns BoundSupervisorTree: Service
+    ],
+    gracefulShutdownSignals: [.sigterm, .sigint],
+    logger: Logger(label: "my-app")
+)
+try await group.run()
+```
+
+### Types
+
+| Type | Purpose |
+|------|---------|
+| `ClusterSystemService` | Wraps `ClusterSystem` as a `ServiceLifecycle.Service`. Suspends until graceful shutdown, then calls `system.shutdown()`. |
+| `BoundSupervisorTree` | A `SupervisorTree` bound to a `ClusterSystem`. Created via `tree.bind(to: system)`. Conforms to `Service`. |
+| `DistributedKitApplication` | Convenience entry point that wires `ClusterSystemService` + `BoundSupervisorTree` + signal handling into a single `run()` call. |
+
+---
+
 ## Elixir/OTP Quick Reference
 
 For developers coming from Elixir/OTP:
@@ -754,12 +822,16 @@ For developers coming from Elixir/OTP:
 | `:permanent` / `:transient` / `:temporary` | `.permanent` / `.transient` / `.temporary` |
 | `Registry` | `Registry` + `ServiceKey` |
 | `GenServer.start_link(name: ...)` | `Singleton<T>.resolve(on:)` |
+| `:application` callback module | `DistributedKitApplication` |
+| Application supervisor tree | `DistributedKitApplication { Supervisor { } }` |
+| SIGTERM graceful shutdown | `ServiceGroup` + `gracefulShutdownSignals` |
 
 ## Requirements
 
 - Swift 6.3+
 - macOS 15+ / iOS 18+ / tvOS 18+ / watchOS 11+
 - [`swift-distributed-actors`](https://github.com/apple/swift-distributed-actors) (main branch)
+- [`swift-service-lifecycle`](https://github.com/swift-server/swift-service-lifecycle) >= 2.3.0
 
 ## License
 

@@ -4,4 +4,5 @@ public enum DistributedKitError: Error, Sendable {
     case serviceNotFound(String)
     case supervisionMaxRestartsExceeded(name: String, count: Int)
     case factoryFailed(name: String, underlying: any Error & Sendable)
+    case missingClusterSystem
 }

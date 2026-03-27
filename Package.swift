@@ -16,6 +16,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-distributed-actors.git", branch: "main"),
         .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "600.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
+        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.3.0"),
     ],
     targets: [
         .macro(
@@ -32,6 +33,7 @@ let package = Package(
                 "DistributedKitMacros",
                 .product(name: "DistributedCluster", package: "swift-distributed-actors"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ],
             path: "Sources/DistributedKit"
         ),
@@ -45,7 +47,11 @@ let package = Package(
         ),
         .testTarget(
             name: "DistributedKitTests",
-            dependencies: ["DistributedKit", "DistributedKitTestKit"]
+            dependencies: [
+                "DistributedKit",
+                "DistributedKitTestKit",
+                .product(name: "ServiceLifecycleTestKit", package: "swift-service-lifecycle"),
+            ]
         ),
         .testTarget(
             name: "DistributedKitMacroTests",

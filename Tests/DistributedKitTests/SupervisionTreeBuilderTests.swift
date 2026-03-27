@@ -108,4 +108,70 @@ struct SupervisionTreeBuilderTests {
 
         #expect(spec.children.count == 3)
     }
+
+    @Test("Conditional child included when true")
+    func conditionalChildTrue() {
+        let includeWorker = true
+        let spec = Supervisor("cond") {
+            ChildSpec<StubChild>(name: "always") { system in StubChild(actorSystem: system) }
+            if includeWorker {
+                ChildSpec<StubChild>(name: "conditional") { system in StubChild(actorSystem: system) }
+            }
+        }
+
+        #expect(spec.children.count == 2)
+    }
+
+    @Test("Conditional child excluded when false")
+    func conditionalChildFalse() {
+        let includeWorker = false
+        let spec = Supervisor("cond") {
+            ChildSpec<StubChild>(name: "always") { system in StubChild(actorSystem: system) }
+            if includeWorker {
+                ChildSpec<StubChild>(name: "conditional") { system in StubChild(actorSystem: system) }
+            }
+        }
+
+        #expect(spec.children.count == 1)
+    }
+
+    @Test("If/else branching selects correct children")
+    func ifElseBranching() {
+        let usePrimary = false
+        let spec = Supervisor("branch") {
+            if usePrimary {
+                ChildSpec<StubChild>(name: "primary") { system in StubChild(actorSystem: system) }
+            } else {
+                ChildSpec<StubChild>(name: "fallback") { system in StubChild(actorSystem: system) }
+            }
+        }
+
+        #expect(spec.children.count == 1)
+        switch spec.children[0] {
+        case .leaf(let child):
+            #expect(child.name == "fallback")
+        case .supervisor:
+            Issue.record("Expected .leaf but got .supervisor")
+        }
+    }
+
+    @Test("For loop accumulates all children")
+    func forLoopChildren() {
+        let names = ["w1", "w2", "w3", "w4"]
+        let spec = Supervisor("loop") {
+            for name in names {
+                ChildSpec<StubChild>(name: name) { system in StubChild(actorSystem: system) }
+            }
+        }
+
+        #expect(spec.children.count == 4)
+        for (i, child) in spec.children.enumerated() {
+            switch child {
+            case .leaf(let s):
+                #expect(s.name == names[i])
+            case .supervisor:
+                Issue.record("Expected .leaf but got .supervisor at index \(i)")
+            }
+        }
+    }
 }

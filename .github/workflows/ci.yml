@@ -2,13 +2,22 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  build-and-test:
+    strategy:
+      matrix:
+        os: [macos-15, ubuntu-latest]
+        include:
+          - os: macos-15
+            swift-container: ""
+          - os: ubuntu-latest
+            swift-container: swiftlang/swift:nightly-6.3-jammy
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.swift-container || null }}
     steps:
       - uses: actions/checkout@v4
       - name: Build
@@ -16,12 +25,13 @@ jobs:
       - name: Test
         run: swift test
 
-  build-linux:
-    runs-on: ubuntu-latest
-    container: swift:6.0
+  build-samples:
+    runs-on: macos-15
+    strategy:
+      matrix:
+        sample: [SampleWorker, SupervisionDemo]
     steps:
       - uses: actions/checkout@v4
-      - name: Build
+      - name: Build ${{ matrix.sample }}
         run: swift build
-      - name: Test
-        run: swift test
+        working-directory: Samples/${{ matrix.sample }}

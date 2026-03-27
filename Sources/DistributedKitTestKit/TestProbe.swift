@@ -40,7 +40,13 @@ public distributed actor TestProbe<Message: Sendable & Codable> {
     }
 
     public func expectNoMessage(for duration: Duration = .seconds(1)) async throws {
-        try await Task.sleep(for: duration)
+        let deadline = ContinuousClock.now.advanced(by: duration)
+        while ContinuousClock.now < deadline {
+            guard messages.isEmpty else {
+                throw TestProbeError.unexpectedMessage
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
         guard messages.isEmpty else {
             throw TestProbeError.unexpectedMessage
         }
