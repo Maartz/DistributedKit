@@ -11,15 +11,13 @@ jobs:
     strategy:
       matrix:
         os: [macos-15, ubuntu-latest]
-        include:
-          - os: macos-15
-            swift-container: ""
-          - os: ubuntu-latest
-            swift-container: swiftlang/swift:nightly-6.3-jammy
     runs-on: ${{ matrix.os }}
-    container: ${{ matrix.swift-container || null }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install Swift 6.3
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.3"
       - name: Build
         run: swift build
       - name: Test
@@ -32,6 +30,10 @@ jobs:
         sample: [SampleWorker, SupervisionDemo]
     steps:
       - uses: actions/checkout@v4
+      - name: Install Swift 6.3
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.3"
       - name: Build ${{ matrix.sample }}
         run: swift build
         working-directory: Samples/${{ matrix.sample }}
