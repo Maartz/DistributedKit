@@ -3,6 +3,7 @@ import UnixSignals
 import DistributedCluster
 import Logging
 
+/// The top-level entry point that boots a cluster system and its supervision tree, analogous to an OTP `Application`.
 public struct DistributedKitApplication: Sendable {
     private let name: String
     private let configureCluster: @Sendable (inout ClusterSystemSettings) -> Void
@@ -10,6 +11,7 @@ public struct DistributedKitApplication: Sendable {
     private let logger: Logger
     private let children: [SupervisionChild]
 
+    /// Creates an application with the given name, cluster configuration, and supervised children.
     public init(
         name: String,
         clusterSettings: @escaping @Sendable (inout ClusterSystemSettings) -> Void = { _ in },
@@ -24,6 +26,7 @@ public struct DistributedKitApplication: Sendable {
         self.children = services()
     }
 
+    /// Boots the cluster system, binds the supervision tree, and runs until shutdown -- equivalent to `Application.start/2` in OTP.
     public func run() async throws {
         let configure = configureCluster
         let system = await ClusterSystem(name) { settings in
