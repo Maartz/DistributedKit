@@ -22,7 +22,7 @@ distributed actor SupervisorRuntime: LifecycleWatch {
     private var managedChildren: [ManagedChild] = []
     private var restartCounts: [String: (count: Int, windowStart: ContinuousClock.Instant)] = [:]
     private var supervisorTasks: [String: SupervisorRuntime] = [:]
-    private var shutdownContinuation: CheckedContinuation<Void, Never>?
+    private var shutdownContinuation: AsyncStream<Void>.Continuation?
     private var isStopping: Bool = false
 
     init(
@@ -185,19 +185,15 @@ distributed actor SupervisorRuntime: LifecycleWatch {
 
     distributed func waitUntilStopped() async {
         if isStopping { return }
-        await withCheckedContinuation { continuation in
-            if isStopping {
-                continuation.resume()
-            } else {
-                shutdownContinuation = continuation
-            }
-        }
+        let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+        shutdownContinuation = continuation
+        for await _ in stream { break }
     }
 
     distributed func initiateShutdown() {
         guard !isStopping else { return }
         isStopping = true
-        shutdownContinuation?.resume()
+        shutdownContinuation?.finish()
         shutdownContinuation = nil
     }
 }
