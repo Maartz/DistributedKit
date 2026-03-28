@@ -3,19 +3,15 @@ import DistributedCluster
 public distributed actor TestProbe<Message: Sendable & Codable> {
     public typealias ActorSystem = ClusterSystem
 
-    private struct Waiter {
-        let id: UInt64
-        let continuation: CheckedContinuation<Message, any Error>
-    }
-
     private var messages: [Message] = []
-    private var waiters: [Waiter] = []
+    private var waiters: [(id: UInt64, continuation: AsyncStream<Message>.Continuation)] = []
     private var nextWaiterId: UInt64 = 0
 
     public distributed func send(_ message: Message) {
         if !waiters.isEmpty {
             let waiter = waiters.removeFirst()
-            waiter.continuation.resume(returning: message)
+            waiter.continuation.yield(message)
+            waiter.continuation.finish()
         } else {
             messages.append(message)
         }
@@ -29,14 +25,19 @@ public distributed actor TestProbe<Message: Sendable & Codable> {
         let waiterId = nextWaiterId
         nextWaiterId += 1
 
-        return try await withCheckedThrowingContinuation { continuation in
-            waiters.append(Waiter(id: waiterId, continuation: continuation))
+        let (stream, continuation) = AsyncStream.makeStream(of: Message.self)
+        waiters.append((id: waiterId, continuation: continuation))
 
-            Task { [weak self] in
-                try? await Task.sleep(for: timeout)
-                try? await self?.timeoutWaiter(id: waiterId)
-            }
+        Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            try? await self?.timeoutWaiter(id: waiterId)
         }
+
+        for await message in stream {
+            return message
+        }
+
+        throw TestProbeError.timeout
     }
 
     public func expectNoMessage(for duration: Duration = .seconds(1)) async throws {
@@ -59,7 +60,7 @@ public distributed actor TestProbe<Message: Sendable & Codable> {
     distributed func timeoutWaiter(id: UInt64) {
         if let index = waiters.firstIndex(where: { $0.id == id }) {
             let waiter = waiters.remove(at: index)
-            waiter.continuation.resume(throwing: TestProbeError.timeout)
+            waiter.continuation.finish()
         }
     }
 }
