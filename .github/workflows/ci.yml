@@ -31,7 +31,9 @@ jobs:
         run: swift test -Xswiftc -Xfrontend -Xswiftc -validate-tbd-against-ir=none -Xswiftc -Xfrontend -Xswiftc -disable-round-trip-debug-types
       - name: Test (macOS)
         if: matrix.os == 'macos-15'
-        run: xcrun xctest .build/debug/DistributedKitPackageTests.xctest
+        run: |
+          swift build --build-tests -Xswiftc -Xfrontend -Xswiftc -validate-tbd-against-ir=none -Xswiftc -Xfrontend -Xswiftc -disable-round-trip-debug-types
+          xcrun xctest .build/arm64-apple-macosx/debug/DistributedKitPackageTests.xctest
 
   build-samples:
     runs-on: macos-15
