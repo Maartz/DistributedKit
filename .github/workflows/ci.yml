@@ -26,12 +26,12 @@ jobs:
         run: swift --version
       - name: Build
         run: swift build -Xswiftc -Xfrontend -Xswiftc -validate-tbd-against-ir=none -Xswiftc -Xfrontend -Xswiftc -disable-round-trip-debug-types
-      - name: Test
-        run: |
-          # Build test bundle
-          swift build --build-tests -Xswiftc -Xfrontend -Xswiftc -validate-tbd-against-ir=none -Xswiftc -Xfrontend -Xswiftc -disable-round-trip-debug-types
-          # Run tests directly using xctest to avoid swift test hang
-          xcrun xctest .build/debug/DistributedKitPackageTests.xctest
+      - name: Test (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: swift test -Xswiftc -Xfrontend -Xswiftc -validate-tbd-against-ir=none -Xswiftc -Xfrontend -Xswiftc -disable-round-trip-debug-types
+      - name: Test (macOS)
+        if: matrix.os == 'macos-15'
+        run: xcrun xctest .build/debug/DistributedKitPackageTests.xctest
 
   build-samples:
     runs-on: macos-15
